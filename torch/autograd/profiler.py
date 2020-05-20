@@ -797,6 +797,8 @@ def parse_cpu_trace(thread_records):
         "is_leaf",
         "output_nr",
         "_version",
+        "unsigned short",
+        "is_complex",
     ]
 
     # cuda start events and the overall profiler start event don't happen
