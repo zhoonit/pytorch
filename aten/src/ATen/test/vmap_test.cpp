@@ -2,6 +2,7 @@
 
 #include <ATen/ATen.h>
 #include <ATen/BatchedTensorImpl.h>
+#include <ATen/BatchingUtils.h>
 
 using namespace at;
 
@@ -125,6 +126,94 @@ TEST(VmapTest, TestBatchedTensorActualDim) {
     ASSERT_EQ(
         batched_impl->actualDim(-1),
         kVmapMaxTensorDims - 1);
+  }
+}
+
+TEST(VmapTest, TestMaterializeBatchDimsAtFront) {
+  {
+    // Input is regular Tensor
+    auto tensor = ones({2, 3, 5});
+    auto result = materializeBatchDimsAtFront(tensor);
+    ASSERT_TRUE(result.first.is_same(tensor));
+    ASSERT_EQ(result.second, 0);
+  }
+  {
+    // Input is BatchedTensor, Batch dims are already at the front
+    auto tensor = ones({2, 3, 5});
+    BatchDims bdims = {{/*lvl*/1, /*dim*/0}, {/*lvl*/3, /*dim*/1}};
+    auto batched = makeBatched(tensor, bdims);
+
+    auto result = materializeBatchDimsAtFront(batched);
+    ASSERT_TRUE(result.first.is_same(tensor));
+    ASSERT_EQ(result.second, 2 | 8);
+  }
+  {
+    // Single batch dim, not at front
+    auto tensor = ones({2, 3, 5});
+    BatchDims bdims = {{/*lvl*/1, /*dim*/1}};
+    auto batched = makeBatched(tensor, bdims);
+
+    auto result = materializeBatchDimsAtFront(batched);
+    ASSERT_EQ(result.first.data_ptr(), tensor.data_ptr());
+    ASSERT_TRUE(at::allclose(result.first, tensor.permute({1, 0, 2})));
+    ASSERT_EQ(result.second, 2);
+  }
+  {
+    // Multiple batch dims, not at front. 
+    auto tensor = ones({2, 3, 5});
+    BatchDims bdims = {{/*lvl*/1, /*dim*/1}, {/*lvl*/2,/*dim*/2}, {/*lvl*/3,/*dim*/0}};
+    auto batched = makeBatched(tensor, bdims);
+
+    auto result = materializeBatchDimsAtFront(batched);
+    ASSERT_EQ(result.first.data_ptr(), tensor.data_ptr());
+    ASSERT_TRUE(at::allclose(result.first, tensor.permute({1, 2, 0})));
+    ASSERT_EQ(result.second, 2 | 4 | 8);
+  }
+}
+
+// Basic test for BatchedTensor::sum.
+// NB: We don't need to write tests in C++ for batching rules if we can test them
+// in Python via the vmap API. These are here to bootstrap that process.
+TEST(VmapTest, TestBatchedTensorSum) {
+  {
+    // Simple: single batch dim, single reduce dim
+    Tensor x = at::randn({2, 3, 5, 7});
+
+    Tensor batched_x = makeBatched(x, {{/*lvl*/1, /*dim*/0}});
+    Tensor batched_out = batched_x.sum(0);
+    const auto& out = maybeGetBatched(batched_out)->value();
+
+    ASSERT_TRUE(at::allclose(out, x.sum(1)));
+  }
+  {
+    // single batch dim, -1 reduce dim handling
+    Tensor x = at::randn({2, 3});
+
+    Tensor batched_x = makeBatched(x, {{/*lvl*/1, /*dim*/1}});
+    Tensor batched_out = batched_x.sum(-1);
+    const auto& out = maybeGetBatched(batched_out)->value();
+
+    ASSERT_TRUE(at::allclose(out, x.sum(0)));
+  }
+  {
+    // single batch dim, multiple reduce dim
+    Tensor x = at::randn({2, 3, 5, 7});
+
+    Tensor batched_x = makeBatched(x, {{/*lvl*/1, /*dim*/1}});
+    Tensor batched_out = batched_x.sum(std::vector<int64_t>{0, 1});
+    const auto& out = maybeGetBatched(batched_out)->value();
+
+    ASSERT_TRUE(at::allclose(out, x.sum(std::vector<int64_t>{0, 2})));
+  }
+  {
+    // multiple batch dim, multiple reduce dim
+    Tensor x = at::randn({2, 3, 5, 7});
+
+    Tensor batched_x = makeBatched(x, {{/*lvl*/1, /*dim*/0}, {/*lvl*/2, /*dim*/1}});
+    Tensor batched_out = batched_x.sum(std::vector<int64_t>{0, 1});
+    const auto& out = maybeGetBatched(batched_out)->value();
+
+    ASSERT_TRUE(at::allclose(out, x.sum(std::vector<int64_t>{2, 3})));
   }
 }
 
