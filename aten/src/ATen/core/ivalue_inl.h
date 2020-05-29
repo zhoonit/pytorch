@@ -971,6 +971,13 @@ inline OptionalArray<int64_t> IValue::toOptionalIntArray() {
   return this->toIntVector();
 }
 
+inline OptionalArray<double> IValue::toOptionalDoubleArray() {
+  if (this->isNone()) {
+    return {};
+  }
+  return this->toDoubleVector();
+}
+
 inline bool IValue::isCustomClass() const {
   return torch::isCustomClass(*this);
 }
