@@ -26,13 +26,23 @@ void confirmPendingUser(
 
 c10::intrusive_ptr<RRef> finishCreatingOwnerRRef(
     const FutureMessage& futureMessage) {
+  std::cout << "in finishCreatingOwnerRRef\n" << std::flush;
   RRefContext::handleException(futureMessage);
+  std::cout << "in finishCreatingOwnerRRef after handle exception\n" << std::flush;
   auto rr = RemoteRet::fromMessage(futureMessage.constValue());
+
+  std::cout << "in finishCreatingOwnerRRef got rr\n" << std::flush;
   TORCH_INTERNAL_ASSERT(
       rr->rrefId() == rr->forkId(),
       "Expecting an OwnerRRef as RemoteRet but got a fork.");
+
+  std::cout << "in finishCreatingOwnerRRef after assert\n" << std::flush;
   auto& ctx = RRefContext::getInstance();
+
+  std::cout << "in finishCreatingOwnerRRef got reference\n" << std::flush;
   auto deletedRRef = ctx.delForkOfOwner(rr->rrefId(), rr->rrefId());
+
+  std::cout << "in finishCreatingOwnerRRef after delete\n" << std::flush;
   return deletedRRef;
 }
 
@@ -74,6 +84,7 @@ void RRefContext::handleException(const FutureMessage& fm) {
   if (fm.hasError()) {
     // TODO: allow users to register an error handler and call it here.
     VLOG(1) << "Got exception: " << fm.error()->what();
+    std::cout << "=== exception is " << fm.error() -> what();
     throw std::runtime_error(fm.error()->what());
   }
 }
@@ -197,6 +208,7 @@ void RRefContext::delAllUsers(std::chrono::milliseconds timeoutMillis) {
   // First, wait for all pending UserRRefs to be confirmed,
   // one kind is pendingUsers_, which are shared from Owner,
   // the other kind pendingChildren_, which are shared from another User.
+  std::cout << "=== in delete users\n" << std::flush;
   std::unordered_map<ForkId, c10::weak_intrusive_ptr<RRef>, ForkId::Hash>
       tempConfirmedUsers;
   {
@@ -211,6 +223,8 @@ void RRefContext::delAllUsers(std::chrono::milliseconds timeoutMillis) {
     tempConfirmedUsers.swap(confirmedUsers_);
   }
 
+  std::cout << "=== after cv\n" << std::flush;
+
   // Start sending UserRRef delete messages, after all pendings are confirmed.
   // Note, there should be no new forkings in between, because it's assumed that
   // this utility is called during graceful shutdown, where no new user RPCs can
@@ -224,6 +238,8 @@ void RRefContext::delAllUsers(std::chrono::milliseconds timeoutMillis) {
     rref_ptr->tryDel();
   }
 
+  std::cout << "=== after for\n" << std::flush;
+
   // Wait for Owners to process all delete UserRRef messages.
   {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -233,6 +249,8 @@ void RRefContext::delAllUsers(std::chrono::milliseconds timeoutMillis) {
       LOG(ERROR) << "Timed out waiting for pending OwnerRRefs to be deleted.";
     }
   }
+
+  std::cout << "=== after all\n" << std::flush;
 }
 
 c10::intrusive_ptr<RRef> RRefContext::getOrCreateRRef(
@@ -649,6 +667,7 @@ void RRefContext::addForkOfOwnerIfNotPresent(
 c10::intrusive_ptr<RRef> RRefContext::delForkOfOwner(
     const RRefId& rrefId,
     const ForkId& forkId) {
+  std::cout << "==== in delForkOfOwner\n" << std::flush;
   c10::intrusive_ptr<RRef> deletedRRef;
   bool ownerReduced = false;
   // There were previously multiple TORCH_CHECKs in this function that checked
@@ -686,7 +705,9 @@ c10::intrusive_ptr<RRef> RRefContext::delForkOfOwner(
     }
   }
   if (ownerReduced) {
+    std::cout << "==== in delForkOfOwner before notify\n" << std::flush;
     deleteAllUsersCV_.notify_all();
+    std::cout << "==== in delForkOfOwner after notify\n" << std::flush;
   }
   return deletedRRef;
 }
