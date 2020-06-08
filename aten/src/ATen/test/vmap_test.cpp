@@ -2,6 +2,7 @@
 
 #include <ATen/ATen.h>
 #include <ATen/BatchedTensorImpl.h>
+#include <ATen/BatchingArgTransforms.h>
 
 using namespace at;
 
@@ -168,6 +169,92 @@ TEST(VmapTest, TestBatchedTensorActualDim) {
     ASSERT_EQ(
         batched_impl->actualDim(-1),
         kVmapMaxTensorDims - 1);
+  }
+}
+TEST(VmapTest, TestMultiBatchArgTransform) {
+  {
+    // Input is regular Tensor
+    auto tensor = ones({2, 3, 5});
+    ASSERT_THROW(MultiBatchArgTransform::logicalToPhysical(tensor), c10::Error);
+  }
+  {
+    // Input is BatchedTensor, Batch dims are already at the front
+    auto tensor = ones({2, 3, 5});
+    BatchDims bdims = {{/*lvl*/1, /*dim*/0}, {/*lvl*/3, /*dim*/1}};
+    auto batched = makeBatched(tensor, bdims);
+
+    auto result = MultiBatchArgTransform::logicalToPhysical(batched);
+    ASSERT_TRUE(result.tensor().is_same(tensor));
+  }
+  {
+    // Single batch dim, not at front
+    auto tensor = ones({2, 3, 5});
+    BatchDims bdims = {{/*lvl*/1, /*dim*/1}};
+    auto batched = makeBatched(tensor, bdims);
+
+    auto result = MultiBatchArgTransform::logicalToPhysical(batched);
+    ASSERT_EQ(result.tensor().data_ptr(), tensor.data_ptr());
+    ASSERT_TRUE(at::allclose(result.tensor(), tensor.permute({1, 0, 2})));
+  }
+  {
+    // Multiple batch dims, not at front.
+    auto tensor = ones({2, 3, 5});
+    BatchDims bdims = {{/*lvl*/1, /*dim*/1}, {/*lvl*/2,/*dim*/2}, {/*lvl*/3,/*dim*/0}};
+    auto batched = makeBatched(tensor, bdims);
+
+    auto result = MultiBatchArgTransform::logicalToPhysical(batched);
+    ASSERT_EQ(result.tensor().data_ptr(), tensor.data_ptr());
+    ASSERT_TRUE(at::allclose(result.tensor(), tensor.permute({1, 2, 0})));
+  }
+  {
+    // Edge case: kVmapNumLevels levels; batch dims are already at front.
+
+    // sizes=[2, 1, 3, 1, 1, 7, 1, 1, 1, 1, ...]
+    auto sizes = std::vector<int64_t>(kVmapNumLevels, 1);
+    sizes[0] = 2;
+    sizes[2] = 3;
+    sizes[5] = 7;
+
+    // bdims = {{lvl=0,dim=0,lvl=1,dim=1,...,{lvl=63,dim=63}}
+    auto batch_dims = maxBatchDimsAtFront();
+    auto tensor = ones(sizes);
+
+    auto batched = makeBatched(tensor, batch_dims);
+    auto result = MultiBatchArgTransform::logicalToPhysical(batched);
+    ASSERT_TRUE(result.tensor().is_same(tensor));
+  }
+  {
+    // Edge case: kVmapNumLevels levels; batch dims are not at front
+
+    // sizes=[1, 3, 2, 1, 1, 7, 1, 1, 1, 1, ..., 1, 1, 5]
+    auto sizes = std::vector<int64_t>(kVmapNumLevels, 1);
+    sizes[1] = 3;
+    sizes[2] = 2;
+    sizes[5] = 7;
+    sizes[kVmapNumLevels - 1] = 5;
+
+    // The goal is to permute sizes such that the final sizes are:
+    // [2, 3, 5, 7, 1, 1, 1, 1, 1, ...]
+    auto expected_result_sizes = std::vector<int64_t>(kVmapNumLevels, 1);
+    expected_result_sizes[0] = 2;
+    expected_result_sizes[1] = 3;
+    expected_result_sizes[2] = 5;
+    expected_result_sizes[3] = 7;
+
+    // bdims = {{0, 2}, {1, 1}, {2, 63}, {3, 5}, {4, 0}, {5, 3}, {6, 4},
+    //          {7, 6}, {8, 7}, {9, 8}, ..., {63, 62}}
+    BatchDims batch_dims = {
+      {0, 2}, {1, 1}, {2, kVmapNumLevels - 1}, {3, 5}, {4, 0}, {5, 3}, {6, 4}
+    };
+    for (int64_t level = 7; level < kVmapNumLevels; level++ ) {
+      batch_dims.emplace_back(level, /*dim=*/level - 1);
+    }
+    auto tensor = ones(sizes);
+
+    auto batched = makeBatched(tensor, batch_dims);
+    auto result = MultiBatchArgTransform::logicalToPhysical(batched);
+    ASSERT_EQ(result.tensor().data_ptr(), tensor.data_ptr());
+    ASSERT_EQ(result.tensor().sizes(), expected_result_sizes);
   }
 }
 
