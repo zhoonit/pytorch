@@ -3,6 +3,7 @@
 #include <ATen/core/Formatting.h>
 #include <ATen/core/function.h>
 #include <ATen/core/jit_type.h>
+#include <ATen/ThreadLocalState.h>
 #include <c10/util/StringUtil.h>
 #include <cmath>
 
@@ -628,6 +629,29 @@ getClassConverter() {
   static std::unordered_map<std::string, std::function<PyObject*(void*)>>
       classConverter;
   return classConverter;
+}
+
+void ivalue::Future::addCallback(
+    std::function<void(void)> callback,
+    bool propagateTLSState) {
+  std::function<void(void)> cb;
+  if (propagateTLSState) {
+    // Save thread local state and restore it in the callback.
+    at::ThreadLocalState tls_state;
+    cb = [tls_state = std::move(tls_state), callback = std::move(callback)] {
+      at::ThreadLocalStateGuard g(tls_state);
+      callback();
+    };
+  } else {
+    cb = std::move(callback);
+  }
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (completed()) {
+    lock.unlock();
+    cb();
+    return;
+  }
+  callbacks_.emplace_back(std::move(cb));
 }
 
 CAFFE2_API intrusive_ptr<ivalue::Future> collectAll(

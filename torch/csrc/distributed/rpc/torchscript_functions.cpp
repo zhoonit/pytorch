@@ -54,18 +54,18 @@ c10::intrusive_ptr<c10::ivalue::Future> rpcTorchscript(
   // Create a JIT future and pass it to futMessage's callback to set state
   // of the JIT future.
   auto futPtr = c10::make_intrusive<c10::ivalue::Future>(returnType);
-  // Save and pass thread local state into the callback
-  at::ThreadLocalState tls_state;
-  futMessage->addCallback([futPtr, tls_state = std::move(tls_state)](
-                              const FutureMessage& futMessage) {
-    at::ThreadLocalStateGuard g(tls_state);
-    if (futMessage.hasError()) {
-      c10::ivalue::Future::FutureError jitFutErr(futMessage.error()->what());
-      futPtr->setError(std::move(jitFutErr));
-    } else {
-      futPtr->markCompleted(deserializeRespToIValue(futMessage.constValue()));
-    }
-  });
+  futMessage->addCallback(
+      [futPtr](const FutureMessage& futMessage) {
+        if (futMessage.hasError()) {
+          c10::ivalue::Future::FutureError jitFutErr(
+              futMessage.error()->what());
+          futPtr->setError(std::move(jitFutErr));
+        } else {
+          futPtr->markCompleted(
+              deserializeRespToIValue(futMessage.constValue()));
+        }
+      },
+      /* propagateTLSState */ true);
   return futPtr;
 }
 
@@ -90,7 +90,6 @@ c10::intrusive_ptr<RRef> remoteTorchscript(
       returns.size());
   auto returnType = returns.at(0).type();
 
-  at::ThreadLocalState tls_state;
   if (ctx.getWorkerId() != dstWorkerInfo.id_) {
     auto userRRefPtr = ctx.createUserRRef(dstWorkerInfo.id_, returnType);
 
@@ -112,11 +111,10 @@ c10::intrusive_ptr<RRef> remoteTorchscript(
 
     ctx.addPendingUser(userRRefPtr->forkId(), userRRefPtr);
     fm->addCallback(
-        [forkId{userRRefPtr->forkId()},
-         tls_state = std::move(tls_state)](const FutureMessage& fm) {
-          at::ThreadLocalStateGuard g(tls_state);
+        [forkId{userRRefPtr->forkId()}](const FutureMessage& fm) {
           callback::confirmPendingUser(fm, forkId);
-        });
+        },
+        /* propagateTLSState */ true);
 
     return userRRefPtr;
   } else {
@@ -140,11 +138,10 @@ c10::intrusive_ptr<RRef> remoteTorchscript(
 
     ownerRRefPtr->registerOwnerCreationFuture(fm);
     fm->addCallback(
-        [tls_state = std::move(tls_state),
-         ownerRRefId = ownerRRefPtr->rrefId()](const FutureMessage& fm) {
-          at::ThreadLocalStateGuard g(tls_state);
+        [ownerRRefId = ownerRRefPtr->rrefId()](const FutureMessage& fm) {
           callback::finishCreatingOwnerRRef(fm, ownerRRefId);
-        });
+        },
+        /* propagateTLSState */ true);
     return ownerRRefPtr;
   }
 }

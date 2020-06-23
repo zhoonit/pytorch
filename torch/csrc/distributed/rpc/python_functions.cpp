@@ -119,38 +119,33 @@ using namespace torch::distributed::autograd;
 c10::intrusive_ptr<JitFuture> wrapFutureMessageInJitFuture(
     const std::shared_ptr<FutureMessage>& futureResponseMessage,
     bool hasValue) {
-  // Save and pass thread local state into the callback. The thread local state
-  // is a lightweight structure when the profiler is disabled.
-  at::ThreadLocalState tls_state;
   if (hasValue) {
     c10::intrusive_ptr<JitFuture> jitFuture =
         c10::make_intrusive<JitFuture>(PyObjectType::get());
     futureResponseMessage->addCallback(
-        [jitFuture, tls_state = std::move(tls_state)](
-            const FutureMessage& futureResponseMessage) {
-          at::ThreadLocalStateGuard g(tls_state);
+        [jitFuture](const FutureMessage& futureResponseMessage) {
           if (futureResponseMessage.hasError()) {
             jitFuture->setError(futureResponseMessage.error()->what());
           } else {
             jitFuture->markCompleted(
                 toIValue(futureResponseMessage.constValue()));
           }
-        });
+        },
+        /* propagateTLSState */ true);
 
     return jitFuture;
   } else {
     c10::intrusive_ptr<JitFuture> jitFuture =
         c10::make_intrusive<JitFuture>(NoneType::get());
     futureResponseMessage->addCallback(
-        [jitFuture, tls_state = std::move(tls_state)](
-            const FutureMessage& futureResponseMessage) {
-          at::ThreadLocalStateGuard g(tls_state);
+        [jitFuture](const FutureMessage& futureResponseMessage) {
           if (futureResponseMessage.hasError()) {
             jitFuture->setError(futureResponseMessage.error()->what());
           } else {
             jitFuture->markCompleted(IValue());
           }
-        });
+        },
+        /* propagateTLSState */ true);
 
     return jitFuture;
   }
@@ -252,7 +247,6 @@ PyRRef pyRemoteBuiltin(
   auto& ctx = RRefContext::getInstance();
   auto agent = RpcAgent::getCurrentRpcAgent();
 
-  at::ThreadLocalState tls_state;
   if (ctx.getWorkerId() != dst.id_) {
     auto userRRef = ctx.createUserRRef(dst.id_, returnType);
 
@@ -269,11 +263,10 @@ PyRRef pyRemoteBuiltin(
     userRRef->registerOwnerCreationFuture(fm);
     ctx.addPendingUser(userRRef->forkId(), userRRef);
     fm->addCallback(
-        [forkId{userRRef->forkId()},
-         tls_state = std::move(tls_state)](const FutureMessage& fm) {
-          at::ThreadLocalStateGuard g(tls_state);
+        [forkId{userRRef->forkId()}](const FutureMessage& fm) {
           callback::confirmPendingUser(fm, forkId);
-        });
+        },
+        /* propagateTLSState */ true);
     return PyRRef(userRRef);
   } else {
     auto ownerRRef = ctx.createOwnerRRef(returnType);
@@ -294,11 +287,10 @@ PyRRef pyRemoteBuiltin(
     // Builtin operators does not return py::object, and hence does not require
     // GIL for destructing the potentially deleted OwerRRef.
     fm->addCallback(
-        [ownerRRefId = ownerRRef->rrefId(),
-         tls_state = std::move(tls_state)](const FutureMessage& fm) {
-          at::ThreadLocalStateGuard g(tls_state);
+        [ownerRRefId = ownerRRef->rrefId()](const FutureMessage& fm) {
           callback::finishCreatingOwnerRRef(fm, ownerRRefId);
-        });
+        },
+        /* propagateTLSState */ true);
     return PyRRef(ownerRRef);
   }
 }
@@ -314,7 +306,6 @@ PyRRef pyRemotePythonUdf(
   auto serializedPyObj =
       SerializedPyObj(std::move(pickledPythonUDF), std::move(tensors));
 
-  at::ThreadLocalState tls_state;
   if (ctx.getWorkerId() != dst.id_) {
     auto userRRef = ctx.createUserRRef(dst.id_, PyObjectType::get());
     auto fm = sendPythonRemoteCall(
@@ -329,11 +320,10 @@ PyRRef pyRemotePythonUdf(
 
     ctx.addPendingUser(userRRef->forkId(), userRRef);
     fm->addCallback(
-        [forkId{userRRef->forkId()},
-         tls_state = std::move(tls_state)](const FutureMessage& fm) {
-          at::ThreadLocalStateGuard g(tls_state);
+        [forkId{userRRef->forkId()}](const FutureMessage& fm) {
           callback::confirmPendingUser(fm, forkId);
-        });
+        },
+        /* propagateTLSState */ true);
     return PyRRef(userRRef);
   } else {
     // Sending remote message to self
@@ -351,15 +341,14 @@ PyRRef pyRemotePythonUdf(
     ownerRRef->registerOwnerCreationFuture(fm);
 
     fm->addCallback(
-        [ownerRRefId = ownerRRef->rrefId(),
-         tls_state = std::move(tls_state)](const FutureMessage& fm) {
-          at::ThreadLocalStateGuard g(tls_state);
+        [ownerRRefId = ownerRRef->rrefId()](const FutureMessage& fm) {
           auto deletedRRef = callback::finishCreatingOwnerRRef(fm, ownerRRefId);
           if (deletedRRef && deletedRRef->isPyObj()) {
             py::gil_scoped_acquire ag;
             deletedRRef.reset();
           }
-        });
+        },
+        /* propagateTLSState */ true);
     return PyRRef(ownerRRef);
   }
 }
