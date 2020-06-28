@@ -115,6 +115,7 @@ white_list = [
     ('aten::__or__', datetime.date(2020, 6, 30)),
     ('aten::__xor__', datetime.date(2020, 6, 30)),
     ('aten::split', datetime.date(2020, 6, 30)),
+    ('aten::mkldnn_convolution_backward_weights', datetime.date(2020, 6, 30)),
 ]
 
 
