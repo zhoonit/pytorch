@@ -79,12 +79,67 @@ struct _str_wrapper<> final {
   }
 };
 
+inline std::ostream& _error_value(std::ostream& ss) {
+  return ss;
+}
+
+// ignore pure string literal
+template <char*>
+inline std::ostream& _error_value(std::ostream& ss, const char* ca) {
+  return ss;
+}
+
+template <typename T>
+inline std::ostream& _error_value(std::ostream& ss, const T& t) {
+  ss << t;
+  return ss;
+}
+
+template <typename T, typename... Args>
+inline std::ostream& _error_value(std::ostream& ss, const T& t, const Args&... args) {
+  return _str(_str(ss, t), args...);
+}
+
+template<typename... Args>
+struct _error_value_wrapper final {
+  static std::string call(const Args&... args) {
+    std::ostringstream ss;
+    _error_value(ss, args...);
+    return ss.str();
+  }
+};
+
+// Specializations for string literal type or empty argument,
+// we don't want to pay the binary size for constructing and destructing a stringstream
+// or even constructing a string. Let's just return a reference to an empty string.
+template<>
+struct _error_value_wrapper<char*> final {
+  static const std::string& call(const char* ca) {
+    thread_local const std::string empty_string_literal;
+    return empty_string_literal;  }
+};
+
+template<>
+struct _error_value_wrapper<> final {
+  static const std::string& call() {
+    thread_local const std::string empty_string_literal;
+    return empty_string_literal;
+  }
+};
 } // namespace detail
 
 // Convert a list of string-like arguments into a single string.
 template <typename... Args>
 inline decltype(auto) str(const Args&... args) {
   return detail::_str_wrapper<typename detail::CanonicalizeStrTypes<Args>::type...>::call(args...);
+}
+
+// Convert a list of error arguments into a single string by striping away string literal arguments, i.e.
+// if an argument is const char*, it will not show up in the returned message.
+// This is to optimize build size.
+template <typename... Args>
+inline decltype(auto) error_value(const Args&... args) {
+  return detail::_error_value_wrapper<typename detail::CanonicalizeStrTypes<Args>::type...>::call(args...);
 }
 
 template <class Container>
